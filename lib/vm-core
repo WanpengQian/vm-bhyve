@@ -59,16 +59,26 @@ core::top(){
 #
 core::list(){
     local _name _loader _cpu _our_host
-    local _memory _run _vm _auto _num _graphics _vnc
+    local _memory _run _vm _auto _num _vnc _pid
+    local _state _pcpu _rss _uptime
     local _format="%s^%s^%s^%s^%s^%s^%s^%s\n"
+
+    cmd::parse_args "$@"
+    shift $?
 
     _our_host=$(hostname)
 
     vm::running_load
 
+    [ -n "${VM_OPT_VERBOSE}" ] && _format="%s^%s^%s^%s^%s^%s^%s^%5s^%8s^%14s^%s\n";
+
     # pass everything below here to column(1)
     {
-        printf "${_format}" "NAME" "DATASTORE" "LOADER" "CPU" "MEMORY" "VNC" "AUTOSTART" "STATE"
+        if [ -n "${VM_OPT_VERBOSE}" ]; then
+            printf "${_format}" "NAME" "DATASTORE" "LOADER" "CPU" "MEMORY" "VNC" "AUTO" "%CPU" "RSZ" "UPTIME" "STATE"
+        else
+            printf "${_format}" "NAME" "DATASTORE" "LOADER" "CPU" "MEMORY" "VNC" "AUTO" "STATE"
+        fi
 
         for _ds in ${VM_DATASTORE_LIST}; do
             datastore::get "${_ds}" || continue
@@ -81,19 +91,36 @@ core::list(){
                 config::get "_loader" "loader" "none"
                 config::get "_cpu" "cpu"
                 config::get "_memory" "memory"
-                config::get "_graphics" "graphics"
 
                 # defaults
                 _vnc="-"
+                _pid=""
+                _state=""
+                _pcpu="-"
+                _rss="-"
+                _uptime="-"
 
                 # check if the guest is running
-                if vm::running_check "_run" "${_name}" || \
+                if vm::running_check "_run" "_pid" "${_name}" || \
                     [ -e "${VM_DS_PATH}/${_name}/run.lock" -a "$(head -n1 ${VM_DS_PATH}/${_name}/run.lock 2>/dev/null)" = "${_our_host}" ]; then
 
                     # if running and graphics, try to get vnc port
-                    if util::checkyesno "${_graphics}"; then
+                    if config::yesno "graphics"; then
                         _vnc=$(grep vnc "${VM_DS_PATH}/${_name}/console" 2>/dev/null |cut -d= -f2)
                         [ -z "${_vnc}" ] && _vnc="-"
+                    fi
+                fi
+
+                if [ -n "${_pid}" -a -n "${VM_OPT_VERBOSE}" ]; then
+                    _state=$(ps -o"%cpu"= -o"rss"= -o"etime"= -p "${_pid}")
+
+                    if [ -n "${_state}" ]; then
+                        util::get_part "_pcpu" "${_state}" 1
+                        util::get_part "_rss" "${_state}" 2
+                        util::get_part "_uptime" "${_state}" 3
+
+                        [ -n "${_rss}" ] && _rss=$(info::__bytes_human "${_rss}" 1 2)
+                        _uptime=$(echo "${_uptime}" |sed 's/\-/d /')
                     fi
                 fi
 
@@ -112,7 +139,11 @@ core::list(){
                     _run="Locked (${_run})"
                 fi
 
-                printf "${_format}" "${_name}" "${_ds}" "${_loader}" "${_cpu}" "${_memory}" "${_vnc}" "${_auto}" "${_run}"
+                if [ -n "${VM_OPT_VERBOSE}" ]; then
+                    printf "${_format}" "${_name}" "${_ds}" "${_loader}" "${_cpu}" "${_memory}" "${_vnc}" "${_auto}" "${_pcpu}" "${_rss}" "${_uptime}" "${_run}"
+                else
+                    printf "${_format}" "${_name}" "${_ds}" "${_loader}" "${_cpu}" "${_memory}" "${_vnc}" "${_auto}" "${_run}"
+                fi
             done
         done
     } | column -ts^
@@ -152,7 +183,7 @@ core::create(){
     [ -z "${_name}" ] && util::usage
 
     # check guest name
-    util::check_name "${_name}" || util::err "invalid virtual machine name - '${_name}'"
+    util::check_name "${_name}" 46 || util::err "invalid virtual machine name - '${_name}'"
     datastore::get_guest "${_name}" && util::err "virtual machine already exists in ${VM_DS_PATH}/${_name}"
     datastore::get "${_ds}" || util::err "unable to load datastore - '${_ds}'"
 
@@ -617,9 +648,7 @@ core::__start(){
     config::load "${VM_DS_PATH}/${_name}/${_name}.conf"
     config::get "_cpu" "cpu"
     config::get "_memory" "memory"
-    config::get "_disk" "disk0_name"
     config::get "_loader" "loader"
-    config::get "_uefi" "uefi"
 
     # check minimum configuration
     if [ -z "${_cpu}" -o -z "${_memory}" ]; then
@@ -632,10 +661,6 @@ core::__start(){
         echo "  ! no unrestricted guest support in cpu. only single vcpu FreeBSD guests supported"
         return 1
     fi
-
-    # check loader
-    # uefi="" deprecated in 1.3, must be set via loader in 1.4
-    [ -z "${_loader}" -a -n "${_uefi}" ] && echo "  ! uefi setting is deprecated. please set loader=\"uefi\", loader=\"uefi-csm\" or loader=\"uefi-custom\""
 
     # check loader
     if [ "${_loader}" = "grub" ]; then
@@ -822,7 +847,7 @@ core::rename(){
     local _new="$2"
 
     [ -z "${_old}" -o -z "${_new}" ] && util::usage
-    util::check_name "${_new}" || util::err "invalid virtual machine name - '${_name}'"
+    util::check_name "${_new}" 46 || util::err "invalid virtual machine name - '${_name}'"
 
     datastore::get_guest "${_new}" && util::err "directory ${VM_DS_PATH}/${_new} already exists"
     datastore::get_guest "${_old}" || util::err "${_old} doesn't appear to be a valid virtual machine"
