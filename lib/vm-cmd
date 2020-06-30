@@ -67,12 +67,7 @@ cmd::parse(){
         image)     cmd::parse_image "$@" ;;
         get)       core::get "$@" ;;
         set)       core::set "$@" ;;
-<<<<<<< HEAD
-        top)       core::top ;;
-        list)      core::list ;;
-=======
         list)      core::list "$@" ;;
->>>>>>> upstream/master
         create)    core::create "$@" ;;
         destroy)   core::destroy "$@" ;;
         rename)    core::rename "$@" ;;
